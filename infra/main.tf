@@ -134,7 +134,7 @@ resource "aws_security_group" "alb_sg" {
 ################# ssh_key_pair ############################
 resource "aws_key_pair" "ssh_key" {
   key_name   = "${var.project}_${var.env}_ssh_key"
-  public_key = file(".mykey.pub")
+  public_key = file(".//mykey.pub")
   tags = {
     Name = "${var.project}_${var.project}_ssh_key"
   }
@@ -146,7 +146,7 @@ resource "aws_instance" "bastion_srv" {
   key_name               = aws_key_pair.ssh_key.id
   subnet_id              = module.vpc.public_subnet1_id
   vpc_security_group_ids = [aws_security_group.bastion_sg.id]
-  user_data              = file(".bastion_userdata.sh")
+  user_data              = file(".//bastion_userdata.sh")
   tags = {
     Name = "${var.project}_${var.env}_bastion_srv"
   }
@@ -156,7 +156,7 @@ resource "aws_instance" "bastion_srv" {
   depends_on = [aws_security_group.bastion_sg]
 
 }
-################# eip for bastion server  ##################
+################# eip for bastion server##################
 resource "aws_eip" "bastion_eip" {
   domain = "vpc"
   tags = {
@@ -176,7 +176,7 @@ resource "aws_instance" "backend_srv" {
   key_name               = aws_key_pair.ssh_key.id
   subnet_id              = module.vpc.private_subnet4_id
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
-  user_data              = file(".\bastion_userdata.sh")
+  user_data              = file(".\\bastion_userdata.sh")
   tags = {
     Name = "${var.project}_${var.env}_backend_srv"
   }
@@ -186,29 +186,34 @@ resource "aws_instance" "backend_srv" {
   depends_on = [aws_security_group.backend_sg]
 
 }
-################# websrv1 server creation ##################
-resource "aws_instance" "websrv1" {
-  ami                    = data.aws_ami.web_ami.id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.ssh_key.id
-  vpc_security_group_ids = [aws_security_group.web_sg.id]
-  subnet_id              = module.vpc.public_subnet2_id
-  tags = {
-    Name = "${var.project}_${var.env}_web_srv-1"
-  }
 
+################## launch template ###########################
+resource "aws_launch_configuration" "launch_config" {
+  name_prefix     = "${var.project}_${var.env}_lt"
+  image_id        = data.aws_ami.web_ami.id
+  instance_type   = "t2.micro"
+  security_groups = [aws_security_group.web_sg.id]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
-################# websrv2 server creation ##################
-resource "aws_instance" "websrv2" {
-  ami                    = data.aws_ami.web_ami.id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.ssh_key.id
-  vpc_security_group_ids = [aws_security_group.web_sg.id]
-  subnet_id              = module.vpc.public_subnet1_id
-  tags = {
-    Name = "${var.project}_${var.env}_web_srv-1"
-  }
+################## auto scaling group #########################
+resource "aws_autoscaling_group" "asg" {
+  name                 = "${var.project}_${var.env}_asg"
+  min_size             = 1
+  max_size             = 3
+  desired_capacity     = 2
+  launch_configuration = aws_launch_configuration.launch_config.name
+  vpc_zone_identifier  = [module.vpc.public_subnet1_id, module.vpc.public_subnet2_id]
 
+  health_check_type = "ELB"
+
+  tag {
+    key                 = "Name"
+    value               = "HashiCorp Learn ASG - Terramino"
+    propagate_at_launch = true
+  }
 }
 
 
@@ -228,25 +233,10 @@ resource "aws_lb_target_group" "target_group" {
     timeout             = "2"
     interval            = "5"
   }
-  depends_on = [aws_instance.websrv1, aws_instance.websrv2]
+  
 }
 
-############# target group attachement ###################
-
-resource "aws_lb_target_group_attachment" "web1_atg" {
-
-  target_group_arn = aws_lb_target_group.target_group.arn
-  target_id        = aws_instance.websrv1.id
-  port             = 80
-}
-
-resource "aws_lb_target_group_attachment" "web2_atg" {
-
-  target_group_arn = aws_lb_target_group.target_group.arn
-  target_id        = aws_instance.websrv2.id
-  port             = 80
-}
-############### application load balancer creation ################
+############ application load balancer creation ################
 resource "aws_lb" "alb" {
   name                       = "${var.project}-alb"
   internal                   = false
@@ -255,6 +245,11 @@ resource "aws_lb" "alb" {
   subnets                    = [module.vpc.public_subnet1_id, module.vpc.public_subnet2_id, module.vpc.public_subnet3_id]
   enable_deletion_protection = false
 
+}
+###########autoscaling_attachment########################
+resource "aws_autoscaling_attachment" "terramino" {
+  autoscaling_group_name = aws_autoscaling_group.asg.id
+  lb_target_group_arn   = aws_lb_target_group.target_group.arn
 }
 
 ############### alb 443 listener creation####################
